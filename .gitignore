@@ -1,0 +1,10 @@
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+*.log
+.vercel/
+coverage/
+*.pem
+*service-account*.json

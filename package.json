@@ -1,0 +1,9 @@
+{
+  "name": "document-qa-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"dev":"next dev", "build":"next build", "start":"next start", "test":"node --test", "check":"node --check lib/chunk.js && node --check lib/ai.js && node --check lib/extract.js"},
+  "dependencies": {"next":"^16.0.0", "react":"^19.2.0", "react-dom":"^19.2.0", "@supabase/supabase-js":"^2.75.0", "pdfjs-dist":"^5.4.0", "mammoth":"^1.9.0"},
+  "engines":{"node":">=20.9"}
+}

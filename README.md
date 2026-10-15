@@ -46,4 +46,3 @@ Before starting, run [`supabase/schema.sql`](supabase/schema.sql) in your Supaba
 | `supabase/schema.sql` | Tables, pgvector search, storage and access policies |
 
 Run `npm test` for extraction and citation checks, or `npm run build` to verify the production build.
-
