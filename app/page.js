@@ -27,7 +27,7 @@ function renderInlineMarkdown(text, keyPrefix) {
 }
 
 function renderMarkdown(text) {
-  const lines = String(text || '').replace(/\\r\\n?/g, '\\n').split('\\n');
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
   const blocks = [];
   let paragraph = [];
   let items = [];
@@ -64,11 +64,11 @@ function renderMarkdown(text) {
       flushList();
       const code = [];
       for (i++; i < lines.length && !lines[i].trim().startsWith(fence); i++) code.push(lines[i]);
-      blocks.push(<pre key={'code-' + blockIndex++}><code>{code.join('\\n')}</code></pre>);
+      blocks.push(<pre key={'code-' + blockIndex++}><code>{code.join('\n')}</code></pre>);
       continue;
     }
 
-    const heading = line.match(/^(#{1,6})\\s+(.+?)\\s*#*\\s*$/);
+    const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
     if (heading) {
       flushParagraph();
       flushList();
@@ -78,15 +78,15 @@ function renderMarkdown(text) {
       continue;
     }
 
-    if (/^\\s*(?:[-*_]\\s*){3,}$/.test(line)) {
+    if (/^\s*(?:[-*_]\s*){3,}$/.test(line)) {
       flushParagraph();
       flushList();
       blocks.push(<hr key={'hr-' + blockIndex++} />);
       continue;
     }
 
-    const bullet = line.match(/^\\s*[-*+]\\s+(.+)$/);
-    const numbered = line.match(/^\\s*\\d+[.)]\\s+(.+)$/);
+    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+    const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
     if (bullet || numbered) {
       flushParagraph();
       const nextType = numbered ? 'ol' : 'ul';
@@ -104,6 +104,7 @@ function renderMarkdown(text) {
   flushList();
   return blocks;
 }
+
 function ErrorMessage({ text }) { return text ? <div className="error-alert" role="alert">{text}</div> : null; }
 
 export default function Home() {
