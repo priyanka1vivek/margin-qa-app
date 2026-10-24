@@ -14,24 +14,57 @@ const examples = ['What are the main takeaways?', 'Which deadlines are mentioned
 function formatSize(bytes) { return bytes > 1024 * 1024 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`; }
 function shortDate(value) { return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' }); }
 function renderInlineMarkdown(text, keyPrefix) {
+  const value = String(text);
   const tick = String.fromCharCode(96);
-  const pattern = new RegExp('(\\*\\*[^*]+\\*\\*|__[^_]+__|' + tick + '[^' + tick + ']+' + tick + '|\\*[^*]+\\*)', 'g');
-  return String(text).split(pattern).filter(Boolean).map((part, index) => {
-    const key = keyPrefix + '-' + index;
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={key}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith('__') && part.endsWith('__')) return <strong key={key}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith(tick) && part.endsWith(tick)) return <code key={key}>{part.slice(1, -1)}</code>;
-    if (part.startsWith('*') && part.endsWith('*')) return <em key={key}>{part.slice(1, -1)}</em>;
-    return part;
-  });
+  const parts = [];
+  let plain = '';
+  let index = 0;
+
+  function flushPlain() {
+    if (plain) {
+      parts.push(plain);
+      plain = '';
+    }
+  }
+
+  while (index < value.length) {
+    let marker = '';
+    let close = -1;
+    let Tag = null;
+    if (value.startsWith('**', index)) {
+      marker = '**'; close = value.indexOf(marker, index + marker.length); Tag = 'strong';
+    } else if (value.startsWith('__', index)) {
+      marker = '__'; close = value.indexOf(marker, index + marker.length); Tag = 'strong';
+    } else if (value[index] === tick) {
+      marker = tick; close = value.indexOf(marker, index + 1); Tag = 'code';
+    } else if (value[index] === '*') {
+      marker = '*'; close = value.indexOf(marker, index + 1); Tag = 'em';
+    }
+
+    if (Tag && close > index + marker.length) {
+      flushPlain();
+      const key = keyPrefix + '-' + parts.length;
+      parts.push(<Tag key={key}>{value.slice(index + marker.length, close)}</Tag>);
+      index = close + marker.length;
+    } else {
+      plain += value[index];
+      index++;
+    }
+  }
+
+  flushPlain();
+  return parts.map((part, partIndex) => typeof part === 'string' ? part : <React.Fragment key={keyPrefix + '-fragment-' + partIndex}>{part}</React.Fragment>);
 }
 
 function renderMarkdown(text) {
-  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  const newline = String.fromCharCode(10);
+  const carriageReturn = String.fromCharCode(13);
+  const lines = String(text || '').split(carriageReturn).join('').split(newline);
   const blocks = [];
   let paragraph = [];
   let items = [];
   let listType = null;
+  let listStart = 1;
   let blockIndex = 0;
 
   function flushParagraph() {
@@ -45,59 +78,86 @@ function renderMarkdown(text) {
     if (!items.length) return;
     const Tag = listType === 'ol' ? 'ol' : 'ul';
     const key = 'list-' + blockIndex++;
-    blocks.push(<Tag key={key}>{items.map((item, index) => <li key={index}>{renderInlineMarkdown(item, key + '-li-' + index)}</li>)}</Tag>);
+    const props = listType === 'ol' ? { start: listStart, key } : { key };
+    blocks.push(<Tag {...props}>{items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, key + '-li-' + itemIndex)}</li>)}</Tag>);
     items = [];
     listType = null;
+    listStart = 1;
   }
 
   const fence = String.fromCharCode(96).repeat(3);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line.trim()) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    const trimmed = line.trim();
+    if (!trimmed) {
       flushParagraph();
       flushList();
       continue;
     }
 
-    if (line.trim().startsWith(fence)) {
+    if (trimmed.startsWith(fence)) {
       flushParagraph();
       flushList();
       const code = [];
-      for (i++; i < lines.length && !lines[i].trim().startsWith(fence); i++) code.push(lines[i]);
-      blocks.push(<pre key={'code-' + blockIndex++}><code>{code.join('\n')}</code></pre>);
+      for (lineIndex++; lineIndex < lines.length && !lines[lineIndex].trim().startsWith(fence); lineIndex++) code.push(lines[lineIndex]);
+      blocks.push(<pre key={'code-' + blockIndex++}><code>{code.join(newline)}</code></pre>);
       continue;
     }
 
-    const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
-    if (heading) {
+    let headingLevel = 0;
+    while (headingLevel < trimmed.length && trimmed[headingLevel] === '#') headingLevel++;
+    if (headingLevel > 0 && headingLevel <= 6 && trimmed[headingLevel] === ' ') {
       flushParagraph();
       flushList();
-      const Tag = 'h' + heading[1].length;
+      const Tag = 'h' + headingLevel;
       const key = 'h-' + blockIndex++;
-      blocks.push(<Tag key={key}>{renderInlineMarkdown(heading[2], key)}</Tag>);
+      blocks.push(<Tag key={key}>{renderInlineMarkdown(trimmed.slice(headingLevel).trim(), key)}</Tag>);
       continue;
     }
 
-    if (/^\s*(?:[-*_]\s*){3,}$/.test(line)) {
+    if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
       flushParagraph();
       flushList();
       blocks.push(<hr key={'hr-' + blockIndex++} />);
       continue;
     }
 
-    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
-    const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (bullet || numbered) {
+    if (trimmed.startsWith('>')) {
       flushParagraph();
-      const nextType = numbered ? 'ol' : 'ul';
-      if (listType && listType !== nextType) flushList();
-      listType = nextType;
-      items.push((bullet || numbered)[1]);
+      flushList();
+      const key = 'quote-' + blockIndex++;
+      blocks.push(<blockquote key={key}>{renderInlineMarkdown(trimmed.slice(1).trim(), key)}</blockquote>);
+      continue;
+    }
+
+    let listContent = null;
+    let nextListType = null;
+    let nextListStart = 1;
+    const bulletPrefix = ['- ', '* ', '+ '].find((prefix) => trimmed.startsWith(prefix));
+    if (bulletPrefix) {
+      listContent = trimmed.slice(bulletPrefix.length);
+      nextListType = 'ul';
+    } else {
+      let digitEnd = 0;
+      while (digitEnd < trimmed.length && trimmed.charCodeAt(digitEnd) >= 48 && trimmed.charCodeAt(digitEnd) <= 57) digitEnd++;
+      if (digitEnd > 0 && (trimmed[digitEnd] === '.' || trimmed[digitEnd] === ')') && trimmed[digitEnd + 1] === ' ') {
+        listContent = trimmed.slice(digitEnd + 2);
+        nextListType = 'ol';
+        nextListStart = Number(trimmed.slice(0, digitEnd)) || 1;
+      }
+    }
+
+    if (listContent !== null) {
+      flushParagraph();
+      if (listType && listType !== nextListType) flushList();
+      if (!items.length) listStart = nextListStart;
+      listType = nextListType;
+      items.push(listContent);
       continue;
     }
 
     flushList();
-    paragraph.push(line.trim());
+    paragraph.push(trimmed);
   }
 
   flushParagraph();
