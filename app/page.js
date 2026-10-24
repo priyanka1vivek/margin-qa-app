@@ -53,7 +53,7 @@ function renderInlineMarkdown(text, keyPrefix) {
   }
 
   flushPlain();
-  return parts.map((part, partIndex) => typeof part === 'string' ? part : <React.Fragment key={keyPrefix + '-fragment-' + partIndex}>{part}</React.Fragment>);
+  return parts;
 }
 
 function renderMarkdown(text) {
