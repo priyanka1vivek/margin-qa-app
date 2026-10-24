@@ -13,6 +13,97 @@ const icons = {
 const examples = ['What are the main takeaways?', 'Which deadlines are mentioned?', 'Summarize the requirements'];
 function formatSize(bytes) { return bytes > 1024 * 1024 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`; }
 function shortDate(value) { return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' }); }
+function renderInlineMarkdown(text, keyPrefix) {
+  const tick = String.fromCharCode(96);
+  const pattern = new RegExp('(\\*\\*[^*]+\\*\\*|__[^_]+__|' + tick + '[^' + tick + ']+' + tick + '|\\*[^*]+\\*)', 'g');
+  return String(text).split(pattern).filter(Boolean).map((part, index) => {
+    const key = keyPrefix + '-' + index;
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={key}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith('__') && part.endsWith('__')) return <strong key={key}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith(tick) && part.endsWith(tick)) return <code key={key}>{part.slice(1, -1)}</code>;
+    if (part.startsWith('*') && part.endsWith('*')) return <em key={key}>{part.slice(1, -1)}</em>;
+    return part;
+  });
+}
+
+function renderMarkdown(text) {
+  const lines = String(text || '').replace(/\\r\\n?/g, '\\n').split('\\n');
+  const blocks = [];
+  let paragraph = [];
+  let items = [];
+  let listType = null;
+  let blockIndex = 0;
+
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    const key = 'p-' + blockIndex++;
+    blocks.push(<p key={key}>{renderInlineMarkdown(paragraph.join(' '), key)}</p>);
+    paragraph = [];
+  }
+
+  function flushList() {
+    if (!items.length) return;
+    const Tag = listType === 'ol' ? 'ol' : 'ul';
+    const key = 'list-' + blockIndex++;
+    blocks.push(<Tag key={key}>{items.map((item, index) => <li key={index}>{renderInlineMarkdown(item, key + '-li-' + index)}</li>)}</Tag>);
+    items = [];
+    listType = null;
+  }
+
+  const fence = String.fromCharCode(96).repeat(3);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    if (line.trim().startsWith(fence)) {
+      flushParagraph();
+      flushList();
+      const code = [];
+      for (i++; i < lines.length && !lines[i].trim().startsWith(fence); i++) code.push(lines[i]);
+      blocks.push(<pre key={'code-' + blockIndex++}><code>{code.join('\\n')}</code></pre>);
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\\s+(.+?)\\s*#*\\s*$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      const Tag = 'h' + heading[1].length;
+      const key = 'h-' + blockIndex++;
+      blocks.push(<Tag key={key}>{renderInlineMarkdown(heading[2], key)}</Tag>);
+      continue;
+    }
+
+    if (/^\\s*(?:[-*_]\\s*){3,}$/.test(line)) {
+      flushParagraph();
+      flushList();
+      blocks.push(<hr key={'hr-' + blockIndex++} />);
+      continue;
+    }
+
+    const bullet = line.match(/^\\s*[-*+]\\s+(.+)$/);
+    const numbered = line.match(/^\\s*\\d+[.)]\\s+(.+)$/);
+    if (bullet || numbered) {
+      flushParagraph();
+      const nextType = numbered ? 'ol' : 'ul';
+      if (listType && listType !== nextType) flushList();
+      listType = nextType;
+      items.push((bullet || numbered)[1]);
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line.trim());
+  }
+
+  flushParagraph();
+  flushList();
+  return blocks;
+}
 function ErrorMessage({ text }) { return text ? <div className="error-alert" role="alert">{text}</div> : null; }
 
 export default function Home() {
@@ -54,7 +145,7 @@ function SignIn({ supabase }) {
 
 function Workspace({ session, supabase }) {
   const [docs, setDocs] = useState([]), [conversations, setConversations] = useState([]), [activeId, setActiveId] = useState(null), [messages, setMessages] = useState([]), [selected, setSelected] = useState([]), [question, setQuestion] = useState(''), [busy, setBusy] = useState(false), [uploading, setUploading] = useState(false), [error, setError] = useState(''), [source, setSource] = useState(null), [mobilePanel, setMobilePanel] = useState('chat');
-  const fileRef = useRef(null), bottomRef = useRef(null);
+  const fileRef = useRef(null), bottomRef = useRef(null), questionRef = useRef(null);
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { Authorization: `Bearer ${session.access_token}`, ...options.headers } });
     const data = await response.json().catch(() => ({}));
@@ -70,6 +161,7 @@ function Workspace({ session, supabase }) {
   }
   useEffect(() => { load(); }, [session.access_token]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, busy]);
+  useEffect(() => { const textarea = questionRef.current; if (!textarea) return; textarea.style.height = 'auto'; textarea.style.height = Math.min(textarea.scrollHeight, 240) + 'px'; }, [question]);
   async function openConversation(id) {
     setError(''); setMobilePanel('chat'); setActiveId(id); setSource(null);
     try { const data = await api(`/api/conversations/${id}`); setMessages(data.messages); setSelected(data.conversation.document_ids); }
@@ -126,6 +218,6 @@ function Workspace({ session, supabase }) {
   }
   const readyDocs = docs.filter(d => d.status === 'ready');
   return <div className="workspace-shell"><aside className={`sidebar ${mobilePanel === 'library' ? 'mobile-open' : ''}`}><div className="side-brand"><div className="logo-mark">{icons.spark}</div><strong>margin<span className="dot">.</span></strong></div><div className="side-section"><div className="section-header"><span>YOUR WORKSPACE</span></div><button className="new-chat" onClick={newConversation}><span>＋</span> New conversation <span className="shortcut">↗</span></button></div><div className="side-section docs-section"><div className="section-header"><span>DOCUMENT LIBRARY</span><b>{docs.length}</b></div><button className="upload-dash" onClick={() => fileRef.current?.click()} disabled={uploading}>{icons.upload}<span>{uploading ? 'Reading & indexing…' : 'Upload a document'}</span></button><input ref={fileRef} type="file" hidden accept=".pdf,.docx,.txt,.md" onChange={upload}/><div className="doc-list">{!docs.length && <p className="side-empty">Add a document to start asking questions.</p>}{docs.map(doc => <div key={doc.id} className={`doc-item ${selected.includes(doc.id) ? 'selected' : ''}`}><button className="doc-select" disabled={doc.status !== 'ready' || !!activeId} onClick={() => setSelected(s => s.includes(doc.id) ? s.filter(x => x !== doc.id) : [...s, doc.id])} aria-label={`${selected.includes(doc.id) ? 'Deselect' : 'Select'} ${doc.filename}`}><span className={`checkbox ${selected.includes(doc.id) ? 'checked' : ''}`}>{selected.includes(doc.id) ? icons.check : ''}</span></button><button className="doc-main" onClick={() => doc.status === 'ready' ? openFile(doc.id) : doc.status === 'failed' ? retry(doc.id) : null}><span className="file-badge">{doc.file_type.toUpperCase()}</span><span className="doc-info"><strong title={doc.filename}>{doc.filename}</strong><small>{doc.status === 'ready' ? `${doc.chunk_count} passages · ${formatSize(doc.file_size)}` : doc.status === 'failed' ? 'Index failed · click to retry' : 'Indexing…'}</small></span></button><button className="doc-remove" aria-label={`Remove ${doc.filename}`} title="Remove" onClick={() => remove(doc.id)}>×</button></div>)}</div><p className="side-tip">PDF, DOCX, TXT, MD · up to 5 MB</p></div><div className="side-section conversations"><div className="section-header"><span>RECENT CONVERSATIONS</span></div>{conversations.length ? conversations.map(c => (<div key={c.id} className="conversation-row"><button className={`conversation ${activeId === c.id ? 'active' : ''}`} onClick={() => openConversation(c.id)}><span className="conversation-icon">◷</span><span title={c.title}>{c.title}</span></button><button className="conversation-action" title="Rename conversation" aria-label={'Rename ' + c.title} onClick={() => renameConversation(c.id, c.title)}>✎</button><button className="conversation-action delete" title="Delete conversation" aria-label={'Delete ' + c.title} onClick={() => deleteConversation(c.id, c.title)}>×</button></div>)) : <p className="side-empty">Your conversations will appear here.</p>}</div><div className="side-footer"><span className="avatar">{session.user.email?.[0]?.toUpperCase() || 'U'}</span><span className="email" title={session.user.email}>{session.user.email}</span><button onClick={() => supabase.auth.signOut()} title="Sign out" aria-label="Sign out">↪</button></div></aside>
-    <main className="main-column"><div className="topbar"><button className="mobile-menu" onClick={() => setMobilePanel(mobilePanel === 'library' ? 'chat' : 'library')}>☰</button><div className="top-path">Workspace <span>/</span> {activeId ? 'Conversation' : 'New conversation'}</div><div className="top-actions"><span className="private-pill"><span>●</span> Private workspace</span></div></div><div className="chat-scroll"><div className="chat-inner">{!messages.length ? <div className="welcome"><div className="welcome-icon">{icons.spark}</div><span className="eyebrow">YOUR KNOWLEDGE, WITH CONTEXT</span><h1>Ask your documents<br/><em>anything.</em></h1><p>Get the answer you need, with the exact source to back it up.</p><div className="example-grid">{examples.map((example, i) => <button key={example} onClick={e => send(e, example)} disabled={!readyDocs.length || busy}><span>{['✦', '◷', '▤'][i]}</span>{example}<b>↗</b></button>)}</div>{!readyDocs.length && <div className="welcome-hint">Start by uploading a document in the library on the left.</div>}</div> : <div className="messages">{messages.map(m => <div key={m.id} className={`message ${m.role}`}><div className="message-avatar">{m.role === 'assistant' ? icons.spark : session.user.email?.[0]?.toUpperCase()}</div><div className="message-body"><span className="message-label">{m.role === 'assistant' ? 'MARGIN' : 'YOU'}</span><div className="message-text">{m.content}</div>{m.citations?.length > 0 && <div className="citation-list">{m.citations.map(c => <button key={c.index} className="cite-chip" onClick={() => setSource(c)}><span>[{c.index}]</span> {c.documentName}{c.page ? ` · p. ${c.page}` : ''} ↗</button>)}</div>}</div></div>)}{busy && <div className="message assistant"><div className="message-avatar">{icons.spark}</div><div className="message-body"><span className="message-label">MARGIN</span><div className="thinking"><i></i><i></i><i></i><span>Reading your sources…</span></div></div></div>}<div ref={bottomRef}/></div>}</div></div><div className="composer-wrap"><ErrorMessage text={error}/><form className="composer" onSubmit={send}><textarea value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(e); } }} placeholder={readyDocs.length ? 'Ask a question about your documents…' : 'Upload a document to get started…'} rows={2} maxLength={1500} disabled={busy || !readyDocs.length}/><div className="composer-bottom"><span>{activeId ? `Using ${selected.length} document${selected.length !== 1 ? 's' : ''} in this conversation` : `${selected.length} document${selected.length !== 1 ? 's' : ''} selected`} <span className="dot-sep">·</span> Enter to send</span><button disabled={busy || !question.trim() || !readyDocs.length} aria-label="Send question">{icons.send}</button></div></form><p className="composer-note">Margin uses your documents as its source. Check important answers against the original.</p></div></main>
+    <main className="main-column"><div className="topbar"><button className="mobile-menu" onClick={() => setMobilePanel(mobilePanel === 'library' ? 'chat' : 'library')}>☰</button><div className="top-path">Workspace <span>/</span> {activeId ? 'Conversation' : 'New conversation'}</div><div className="top-actions"><span className="private-pill"><span>●</span> Private workspace</span></div></div><div className="chat-scroll"><div className="chat-inner">{!messages.length ? <div className="welcome"><div className="welcome-icon">{icons.spark}</div><span className="eyebrow">YOUR KNOWLEDGE, WITH CONTEXT</span><h1>Ask your documents<br/><em>anything.</em></h1><p>Get the answer you need, with the exact source to back it up.</p><div className="example-grid">{examples.map((example, i) => <button key={example} onClick={e => send(e, example)} disabled={!readyDocs.length || busy}><span>{['✦', '◷', '▤'][i]}</span>{example}<b>↗</b></button>)}</div>{!readyDocs.length && <div className="welcome-hint">Start by uploading a document in the library on the left.</div>}</div> : <div className="messages">{messages.map(m => <div key={m.id} className={`message ${m.role}`}><div className="message-avatar">{m.role === 'assistant' ? icons.spark : session.user.email?.[0]?.toUpperCase()}</div><div className="message-body"><span className="message-label">{m.role === 'assistant' ? 'MARGIN' : 'YOU'}</span><div className="message-text">{renderMarkdown(m.content)}</div>{m.citations?.length > 0 && <div className="citation-list">{m.citations.map(c => <button key={c.index} className="cite-chip" onClick={() => setSource(c)}><span>[{c.index}]</span> {c.documentName}{c.page ? ` · p. ${c.page}` : ''} ↗</button>)}</div>}</div></div>)}{busy && <div className="message assistant"><div className="message-avatar">{icons.spark}</div><div className="message-body"><span className="message-label">MARGIN</span><div className="thinking"><i></i><i></i><i></i><span>Reading your sources…</span></div></div></div>}<div ref={bottomRef}/></div>}</div></div><div className="composer-wrap"><ErrorMessage text={error}/><form className="composer" onSubmit={send}><textarea ref={questionRef} value={question} onChange={e => setQuestion(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(e); } }} placeholder={readyDocs.length ? 'Ask a question about your documents…' : 'Upload a document to get started…'} rows={2} maxLength={1500} disabled={busy || !readyDocs.length}/><div className="composer-bottom"><span>{activeId ? `Using ${selected.length} document${selected.length !== 1 ? 's' : ''} in this conversation` : `${selected.length} document${selected.length !== 1 ? 's' : ''} selected`} <span className="dot-sep">·</span> Enter to send</span><button disabled={busy || !question.trim() || !readyDocs.length} aria-label="Send question">{icons.send}</button></div></form><p className="composer-note">Margin uses your documents as its source. Check important answers against the original.</p></div></main>
     <aside className={`source-panel ${mobilePanel === 'sources' ? 'mobile-open' : ''}`}><div className="source-header"><span>SOURCE INSPECTOR</span><button onClick={() => setMobilePanel('chat')} className="mobile-close" aria-label="Close sources">×</button></div>{source ? <div className="source-content"><span className="source-overline">CITED PASSAGE</span><h2>{source.documentName}</h2><span className="source-page">{icons.file} {source.page ? `Page ${source.page}` : 'Document excerpt'}</span><div className="source-quote"><span>“</span><p>{source.snippet}</p></div><button className="source-open" onClick={() => openFile(source.documentId, source.page)}>Open original document ↗</button><div className="source-explain"><span>{icons.spark}</span><p>Answers are linked back to the passages used to generate them.</p></div></div> : <div className="no-source"><div className="stack-art"><div></div><div></div><div>{icons.book}</div></div><h2>Trace it back.</h2><p>When an answer cites a source, you’ll see the supporting passage right here.</p><span className="source-ornament">✦ &nbsp; SOURCES FIRST &nbsp; ✦</span></div>}</aside><button className="mobile-sources" onClick={() => setMobilePanel('sources')}>Sources ↗</button></div>;
 }
